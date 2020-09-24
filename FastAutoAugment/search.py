@@ -180,9 +180,13 @@ if __name__ == '__main__':
     paths = [_get_path(C.get()['dataset'], C.get()['model']['type'], 'ratio%.1f_fold%d' % (args.cv_ratio, i)) for i in
              range(cv_num)]
     print(paths)
+
+    pretrain_results = [ train_model(copy.deepcopy(copied_c), args.dataroot, C.get()['aug'], args.cv_ratio, i, save_path=paths[i], skip_exist=True) for i in range(cv_num)]
+
     tqdm_epoch = tqdm(range(C.get()['epoch']))
     is_done = False
     for epoch in tqdm_epoch:
+
         while True:
             epochs_per_cv = OrderedDict()
             for cv_idx in range(cv_num):
@@ -200,13 +204,12 @@ if __name__ == '__main__':
             if len(epochs_per_cv) == cv_num and min(epochs_per_cv.values()) >= epoch:
                 break
             time.sleep(1)
+            print('yahoo')
         if is_done:
             break
 
     logger.info('getting results...')
-    pretrain_results = [
-        train_model(copy.deepcopy(copied_c), args.dataroot, C.get()['aug'], args.cv_ratio, i, save_path=paths[i],
-                    skip_exist=True) for i in range(cv_num)]
+
 
     for r_model, r_cv, r_dict in pretrain_results:
         logger.info('model=%s cv=%d top1_train=%.4f top1_valid=%.4f' % (

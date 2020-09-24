@@ -90,7 +90,7 @@ def inspect_decode_labels(pred, num_images=1, num_classes=NUM_CLASSES,
 
 class GTA5_Dataset(data.Dataset):
     def __init__(self, data_root_path='/content/GTA5', split='train', transform_pre=None,
-                 transform_after=None, transform_target_after=None, seed=1, sample='full'):
+                 transform_after=None, transform_target_after=None, seed=0, sample='full'):
         assert os.path.exists(data_root_path)
         self.img_path_zip, self.gt_path_zip = os.path.join(data_root_path, 'images.zip'), os.path.join(data_root_path,
                                                                                                        'labels.zip')
@@ -105,8 +105,12 @@ class GTA5_Dataset(data.Dataset):
         if sample == 'full':
             pass
         else:
-            rang = np.random.RandomState(seed)
-            self.items = np.random.choice(self.items, sample, replace=False)
+            if not seed:
+                self.items = np.random.choice(self.items, sample, replace=False)
+            else:
+                rang = np.random.RandomState(seed)
+                self.items = rang.choice(self.items, sample, replace=False)
+
         # self.id_to_trainid = {7: 0,8: 1,11: 2,12: 3,13: 4,17: 5,19: 6,20: 7,21: 8,22: 9,23: 10,24: 11,25: 12,26: 13,27: 14,28: 15,31: 16,32: 17,33: 18,34: 13}
         self.id_to_trainid = d = {7: 0, 8: 1, 11: 2, 12: 3, 13: 4, 17: 5, 18: 5, 19: 6, 20: 7, 21: 8, 22: 9, 23: 10,
                                   24: 11, 25: 12, 26: 13, 34: 13, 27: 14, 28: 15, 31: 16,

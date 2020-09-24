@@ -16,7 +16,6 @@ def adjust_learning_rate_resnet(optimizer):
     else:
         raise ValueError('invalid epoch=%d for resnet scheduler' % C.get()['epoch'])
 
-        
 class MultiStepLR_HotFix(MultiStepLR):
     def __init__(self, optimizer, milestones, gamma=0.1, last_epoch=-1):
         super(MultiStepLR_HotFix, self).__init__(optimizer, milestones, gamma, last_epoch)
