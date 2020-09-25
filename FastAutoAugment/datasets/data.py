@@ -11,7 +11,8 @@ from PIL import Image
 
 from torch.utils.data import SubsetRandomSampler, Sampler, Subset, ConcatDataset
 import torch.distributed as dist
-from torchvision.transforms import transforms
+from torchvision import transforms
+
 from sklearn.model_selection import StratifiedShuffleSplit
 from theconf import Config as C
 
@@ -197,20 +198,20 @@ def get_dataloaders(dataset, batch, dataroot, split=0.15, split_idx=0, multinode
         total_trainset = GTA5_Dataset(data_root_path=dataroot, split='train', transform_pre=transform_train_pre,
                                       transform_target_after=transform_target_after, transform_after=transform_train,
                                       sample=10000)
-        total_validset = GTA5_Dataset(data_root_path=dataroot, split='valid', transform_pre=transform_valid_pre,
+        total_validset = GTA5_Dataset(data_root_path=dataroot, split='val', transform_pre=transform_valid_pre,
                                       transform_target_after=transform_target_after, transform_after=transform_test,
                                       sample=5000, )
-        testset = GTA5_Dataset(data_root_path=dataroot, split='valid', transform_pre=transform_test_pre,
+        testset = GTA5_Dataset(data_root_path=dataroot, split='test', transform_pre=transform_test_pre,
                                transform_target_after=transform_target_after, transform_after=transform_test,
                                sample=10000)
     elif dataset == 'reduced_gta5':
         total_trainset = GTA5_Dataset(data_root_path=dataroot, split='train', transform_pre=transform_train_pre,
                                       transform_target_after=transform_target_after, transform_after=transform_train,
                                       sample=500)
-        total_validset = GTA5_Dataset(data_root_path=dataroot, split='valid', transform_pre=transform_valid_pre,
+        total_validset = GTA5_Dataset(data_root_path=dataroot, split='val', transform_pre=transform_valid_pre,
                                       transform_target_after=transform_target_after, transform_after=transform_test,
                                       sample=1000)
-        testset = GTA5_Dataset(data_root_path=dataroot, split='valid', transform_pre=transform_test_pre,
+        testset = GTA5_Dataset(data_root_path=dataroot, split='test', transform_pre=transform_test_pre,
                                transform_target_after=transform_target_after, transform_after=transform_test,sample=2000)
     else:
         raise ValueError('invalid dataset name=%s' % dataset)
@@ -249,12 +250,12 @@ def get_dataloaders(dataset, batch, dataroot, split=0.15, split_idx=0, multinode
                                                                             rank=dist.get_rank())
             logger.info(f'----- dataset with DistributedSampler  {dist.get_rank()}/{dist.get_world_size()}')
 
-    trainloader = torch.utils.data.DataLoader(total_trainset, batch_size=batch, shuffle=True if train_sampler is None else False, num_workers=8, pin_memory=True, sampler=train_sampler, drop_last=True)
+    trainloader = torch.utils.data.DataLoader(total_trainset, batch_size=batch, shuffle=True if train_sampler is None else False, num_workers=C.get().conf.get('num_worker',0), pin_memory=True, sampler=train_sampler, drop_last=True)
     if 'gta5' in dataset:
-        validloader = torch.utils.data.DataLoader(total_validset, batch_size=batch, shuffle=False, num_workers=4, pin_memory=True, sampler=valid_sampler, drop_last=False)
+        validloader = torch.utils.data.DataLoader(total_validset, batch_size=batch, shuffle=False, num_workers=C.get().conf.get('num_worker',0), pin_memory=True, sampler=valid_sampler, drop_last=False)
     else:
-        validloader = torch.utils.data.DataLoader(total_trainset, batch_size=batch, shuffle=False, num_workers=4, pin_memory=True, sampler=valid_sampler, drop_last=False)
-    testloader = torch.utils.data.DataLoader(testset, batch_size=batch, shuffle=False, num_workers=8, pin_memory=True,drop_last=False)
+        validloader = torch.utils.data.DataLoader(total_trainset, batch_size=batch, shuffle=False, num_workers=C.get().conf.get('num_worker',0), pin_memory=True, sampler=valid_sampler, drop_last=False)
+    testloader = torch.utils.data.DataLoader(testset, batch_size=batch, shuffle=False, num_workers=C.get().conf.get('num_worker',0), pin_memory=True,drop_last=False)
     return train_sampler, trainloader, validloader, testloader
 
 

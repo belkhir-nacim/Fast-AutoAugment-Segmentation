@@ -107,5 +107,6 @@ def num_class(dataset):
         'reduced_svhn': 10,
         'imagenet': 1000,
         'reduced_imagenet': 120,
-
+        'gta5': 20,
+        'reduced_gta5': 20
     }[dataset]

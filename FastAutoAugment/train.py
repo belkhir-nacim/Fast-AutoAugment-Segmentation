@@ -131,12 +131,20 @@ def train_and_eval(tag, dataroot, test_ratio=0.0, cv_fold=0, reporter=None, metr
     max_epoch = C.get()['epoch']
     trainsampler, trainloader, validloader, testloader_ = get_dataloaders(C.get()['dataset'], C.get()['batch'], dataroot, test_ratio, split_idx=cv_fold, multinode=(local_rank >= 0))
 
-    if C.get().conf.get('class_weighting', None) =='enet':
-        class_weights = enet_weighing(trainloader, num_class(C.get()['dataset']))
-    elif C.get().conf.get('class_weighting', None)=='mfb':
-        class_weights = median_freq_balancing(trainloader, num_class(C.get()['dataset']))
-    else:
-        class_weights = None
+
+    if C.get().conf.get('class_weighting', None) is not None:
+
+        if C.get().conf.get('class_weighting', None) =='enet':
+            class_weights = enet_weighing(trainloader, num_class(C.get()['dataset']))
+        elif C.get().conf.get('class_weighting', None)=='mfb':
+            class_weights = median_freq_balancing(trainloader, num_class(C.get()['dataset']))
+        else:
+            class_weights = None
+        if class_weights is not None:
+            if C.get().conf.get('ignore_label',1000) < num_class(C.get()['dataset']):
+                class_weights[C.get().conf.get('ignore_label',1000)] = 0
+            class_weights = torch.from_numpy(class_weights).float().cuda()
+
     # create a model & an optimizer
     model = get_model(C.get()['model'], num_class(C.get()['dataset']), local_rank=local_rank)
     model_ema = get_model(C.get()['model'], num_class(C.get()['dataset']), local_rank=-1)
