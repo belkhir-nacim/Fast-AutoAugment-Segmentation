@@ -27,8 +27,10 @@ from FastAutoAugment.tf_port.rmsprop import RMSpropTF
 from FastAutoAugment.aug_mixup import CrossEntropyMixUpLabelSmooth, mixup
 from FastAutoAugment.datasets import enet_weighing, median_freq_balancing
 from warmup_scheduler import GradualWarmupScheduler
+
 logger = get_logger('Fast AutoAugment')
 logger.setLevel(logging.INFO)
+
 
 def run_epoch(model, loader, loss_fn, optimizer, desc_default='', epoch=0, writer=None, verbose=1, scheduler=None,
               is_master=True, ema=None, wd=0.0, tqdm_disabled=False):
@@ -40,8 +42,8 @@ def run_epoch(model, loader, loss_fn, optimizer, desc_default='', epoch=0, write
 
     loss_ema = None
     metrics = Accumulator()
-    if C.get().conf.get('task','classification') =='segmentation':
-        iou_meter = IoU(num_class(C.get()['dataset']), ignore_index= C.get().conf.get('ignore_label',255) )
+    if C.get().conf.get('task', 'classification') == 'segmentation':
+        iou_meter = IoU(num_class(C.get()['dataset']), ignore_index=C.get().conf.get('ignore_label', 255))
         iou_meter.reset()
 
     cnt = 0
@@ -72,12 +74,14 @@ def run_epoch(model, loader, loss_fn, optimizer, desc_default='', epoch=0, write
             if ema is not None:
                 ema(model, (epoch - 1) * total_steps + steps)
 
-        if C.get().conf.get('task','classification') =='segmentation':
-            iou_meter.add(predicted=preds.detach(),target=label.detach())
-            metrics.add_dict({ 'loss': loss.item() * len(data)})
+        top1, top5, = None, None
+        if C.get().conf.get('task', 'classification') == 'segmentation':
+            iou_meter.add(predicted=preds.detach(), target=label.detach())
+            metrics.add_dict({'loss': loss.item() * len(data)})
         else:
             top1, top5 = accuracy(preds, label, (1, 5))
-            metrics.add_dict({ 'loss': loss.item() * len(data), 'top1': top1.item() * len(data), 'top5': top5.item() * len(data),})
+            metrics.add_dict(
+                {'loss': loss.item() * len(data), 'top1': top1.item() * len(data), 'top5': top5.item() * len(data), })
 
         cnt += len(data)
         if loss_ema:
@@ -86,6 +90,8 @@ def run_epoch(model, loader, loss_fn, optimizer, desc_default='', epoch=0, write
             loss_ema = loss.item()
         if verbose:
             postfix = metrics / cnt
+            if C.get().conf.get('task', 'classification') == 'segmentation':
+                postfix['iou'] = iou_meter.value()[1]
             if optimizer:
                 postfix['lr'] = optimizer.param_groups[0]['lr']
             postfix['loss_ema'] = loss_ema
@@ -93,20 +99,31 @@ def run_epoch(model, loader, loss_fn, optimizer, desc_default='', epoch=0, write
 
         if scheduler is not None:
             scheduler.step(epoch - 1 + float(steps) / total_steps)
-        del preds, loss, top1, top5, data, label
 
     if tqdm_disabled and verbose:
-        if optimizer: logger.info('[%s %03d/%03d] %s lr=%.6f', desc_default, epoch, C.get()['epoch'], metrics / cnt, optimizer.param_groups[0]['lr'])
-        else: logger.info('[%s %03d/%03d] %s', desc_default, epoch, C.get()['epoch'], metrics / cnt)
+        if optimizer:
+            if C.get().conf.get('task', 'classification') == 'segmentation':
+                logger.info('[%s %03d/%03d] %s  iou==%.6f  lr=%.6f', desc_default, epoch, C.get()['epoch'], metrics / cnt, iou_meter.value()[1],
+                            optimizer.param_groups[0]['lr'])
+            else:
+                logger.info('[%s %03d/%03d] %s lr=%.6f', desc_default, epoch, C.get()['epoch'], metrics / cnt,
+                            optimizer.param_groups[0]['lr'])
+        else:
+            if C.get().conf.get('task', 'classification') == 'segmentation':
+                logger.info('[%s %03d/%03d] %s iou==%.6f', desc_default, epoch, C.get()['epoch'], metrics / cnt,iou_meter.value()[1])
+            else:
+                logger.info('[%s %03d/%03d] %s', desc_default, epoch, C.get()['epoch'], metrics / cnt)
 
     metrics /= cnt
-    metrics.metrics['miou'] = iou_meter.value()
+    if C.get().conf.get('task', 'classification') == 'segmentation':
+        metrics.metrics['miou'] = iou_meter.value()[1]
     if optimizer:
         metrics.metrics['lr'] = optimizer.param_groups[0]['lr']
     if verbose:
         for key, value in metrics.items():
             writer.add_scalar(key, value, epoch)
     return metrics
+
 
 def train_and_eval(tag, dataroot, test_ratio=0.0, cv_fold=0, reporter=None, metric='last', save_path=None,
                    only_eval=False, local_rank=-1, evaluation_interval=5):
@@ -129,20 +146,21 @@ def train_and_eval(tag, dataroot, test_ratio=0.0, cv_fold=0, reporter=None, metr
         reporter = lambda **kwargs: 0
 
     max_epoch = C.get()['epoch']
-    trainsampler, trainloader, validloader, testloader_ = get_dataloaders(C.get()['dataset'], C.get()['batch'], dataroot, test_ratio, split_idx=cv_fold, multinode=(local_rank >= 0))
-
+    trainsampler, trainloader, validloader, testloader_ = get_dataloaders(C.get()['dataset'], C.get()['batch'],
+                                                                          dataroot, test_ratio, split_idx=cv_fold,
+                                                                          multinode=(local_rank >= 0))
 
     if C.get().conf.get('class_weighting', None) is not None:
 
-        if C.get().conf.get('class_weighting', None) =='enet':
+        if C.get().conf.get('class_weighting', None) == 'enet':
             class_weights = enet_weighing(trainloader, num_class(C.get()['dataset']))
-        elif C.get().conf.get('class_weighting', None)=='mfb':
+        elif C.get().conf.get('class_weighting', None) == 'mfb':
             class_weights = median_freq_balancing(trainloader, num_class(C.get()['dataset']))
         else:
             class_weights = None
         if class_weights is not None:
-            if C.get().conf.get('ignore_label',1000) < num_class(C.get()['dataset']):
-                class_weights[C.get().conf.get('ignore_label',1000)] = 0
+            if C.get().conf.get('ignore_label', 1000) < num_class(C.get()['dataset']):
+                class_weights[C.get().conf.get('ignore_label', 1000)] = 0
             class_weights = torch.from_numpy(class_weights).float().cuda()
 
     # create a model & an optimizer
@@ -150,24 +168,28 @@ def train_and_eval(tag, dataroot, test_ratio=0.0, cv_fold=0, reporter=None, metr
     model_ema = get_model(C.get()['model'], num_class(C.get()['dataset']), local_rank=-1)
     model_ema.eval()
 
-
-    if C.get().conf.get('task','classification') =='segmentation':
-        criterion_ce = criterion = CrossEntropyLoss2d(weight=class_weights,ignore_label= C.get().conf.get('ignore_label',255))
+    if C.get().conf.get('task', 'classification') == 'segmentation':
+        criterion_ce = criterion = CrossEntropyLoss2d(weight=class_weights,
+                                                      ignore_label=C.get().conf.get('ignore_label', 255))
     else:
-        criterion_ce = criterion = CrossEntropyLabelSmooth(num_class(C.get()['dataset']), C.get().conf.get('lb_smooth', 0))
+        criterion_ce = criterion = CrossEntropyLabelSmooth(num_class(C.get()['dataset']),
+                                                           C.get().conf.get('lb_smooth', 0))
         if C.get().conf.get('mixup', 0.0) > 0.0:
             criterion = CrossEntropyMixUpLabelSmooth(num_class(C.get()['dataset']), C.get().conf.get('lb_smooth', 0))
     if C.get()['optimizer']['type'] == 'sgd':
         optimizer = optim.SGD(model.parameters(), lr=C.get()['lr'], momentum=C.get()['optimizer'].get('momentum', 0.9),
                               weight_decay=0.0, nesterov=C.get()['optimizer'].get('nesterov', True))
     elif C.get()['optimizer']['type'] == 'rmsprop':
-        optimizer = RMSpropTF(model.parameters(),lr=C.get()['lr'],weight_decay=0.0,alpha=0.9, momentum=0.9,eps=0.001)
+        optimizer = RMSpropTF(model.parameters(), lr=C.get()['lr'], weight_decay=0.0, alpha=0.9, momentum=0.9,
+                              eps=0.001)
     elif C.get()['optimizer']['type'] == 'adam':
         from torch.optim import Adam
-        optimizer = Adam(model.parameters(),lr=C.get()['lr'], weight_decay=0.0, alpha=0.9, momentum=0.9,eps=0.001)
+        optimizer = Adam(model.parameters(), lr=C.get()['lr'], weight_decay=0.0, eps=0.001)
+    elif C.get()['optimizer']['type'] == 'ranger'   :
+        from FastAutoAugment.optim import Ranger
+        optimizer = Ranger(model.parameters(), lr=C.get()['lr'], weight_decay=1e-4, alpha=0.9,  eps=0.001)
     else:
         raise ValueError('invalid optimizer type=%s' % C.get()['optimizer']['type'])
-
 
     lr_scheduler_type = C.get()['lr_schedule'].get('type', 'cosine')
     if lr_scheduler_type == 'cosine':
@@ -175,14 +197,17 @@ def train_and_eval(tag, dataroot, test_ratio=0.0, cv_fold=0, reporter=None, metr
     elif lr_scheduler_type == 'resnet':
         scheduler = adjust_learning_rate_resnet(optimizer)
     elif lr_scheduler_type == 'efficientnet':
-        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lambda x: 0.97 ** int( (x + C.get()['lr_schedule']['warmup']['epoch']) / 2.4))
+        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lambda x: 0.97 ** int(
+            (x + C.get()['lr_schedule']['warmup']['epoch']) / 2.4))
     elif lr_scheduler_type == 'none':
         scheduler = None
     else:
         raise ValueError('invalid lr_schduler=%s' % lr_scheduler_type)
 
     if C.get()['lr_schedule'].get('warmup', None) and C.get()['lr_schedule']['warmup']['epoch'] > 0:
-        scheduler = GradualWarmupScheduler( optimizer, multiplier=C.get()['lr_schedule']['warmup']['multiplier'], total_epoch=C.get()['lr_schedule']['warmup']['epoch'], after_scheduler=scheduler)
+        scheduler = GradualWarmupScheduler(optimizer, multiplier=C.get()['lr_schedule']['warmup']['multiplier'],
+                                           total_epoch=C.get()['lr_schedule']['warmup']['epoch'],
+                                           after_scheduler=scheduler)
 
     if not tag or not is_master:
         from FastAutoAugment.metrics import SummaryWriterDummy as SummaryWriter
@@ -232,7 +257,8 @@ def train_and_eval(tag, dataroot, test_ratio=0.0, cv_fold=0, reporter=None, metr
                 else:
                     only_eval = True
                 if ema is not None:
-                    ema.shadow = data.get('ema', {}) if isinstance(data.get('ema', {}), dict) else data['ema'].state_dict()
+                    ema.shadow = data.get('ema', {}) if isinstance(data.get('ema', {}), dict) else data[
+                        'ema'].state_dict()
             del data
 
     if local_rank >= 0:
@@ -379,7 +405,9 @@ if __name__ == '__main__':
     import time
 
     t = time.time()
-    result = train_and_eval(args.tag, args.dataroot, test_ratio=args.cv_ratio, cv_fold=args.cv, save_path=args.save, only_eval=args.only_eval, local_rank=args.local_rank, metric='test', evaluation_interval=args.evaluation_interval)
+    result = train_and_eval(args.tag, args.dataroot, test_ratio=args.cv_ratio, cv_fold=args.cv, save_path=args.save,
+                            only_eval=args.only_eval, local_rank=args.local_rank, metric='test',
+                            evaluation_interval=args.evaluation_interval)
     elapsed = time.time() - t
 
     logger.info('done.')

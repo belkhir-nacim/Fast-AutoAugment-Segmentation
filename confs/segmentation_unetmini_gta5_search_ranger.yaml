@@ -5,15 +5,14 @@ cutout: 80
 batch: 4
 epoch: 200
 aug: default
-lr: 0.1
+lr: 0.005
 lr_schedule:
-  type: 'efficientnet'
+  type: 'none'
   warmup:
     multiplier: 1
     epoch: 5
 optimizer:
-  type: sgd
-  nesterov: True
+  type: adam
   decay: 0.0002
   ema: 0
 class_weighting: enet
