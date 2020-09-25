@@ -2,7 +2,7 @@ model:
   type: unetmini
 dataset: reduced_gta5
 cutout: 80
-batch: 128
+batch: 4
 epoch: 200
 aug: default
 lr: 0.1

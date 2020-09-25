@@ -53,8 +53,8 @@ logger = get_logger('Fast AutoAugment')
 
 
 def _get_path(dataset, model, tag):
-    return os.path.join(os.path.dirname(os.path.realpath(__file__)),
-                        'models/%s_%s_%s.pt' % (dataset, model, tag))  # TODO
+    return os.path.join(os.path.dirname(os.path.realpath(__file__)), 'models',
+                        '%s_%s_%s.pt' % (dataset, model, tag))  # TODO
 
 
 # @ray.remote(num_gpus=4, max_calls=1) #TODO: change to num_gpus=1 ???
@@ -63,7 +63,6 @@ def train_model(config, dataroot, augment, cv_ratio_test, cv_fold, save_path=Non
     C.get()
     C.get().conf = config
     C.get()['aug'] = augment
-
     result = train_and_eval(None, dataroot, cv_ratio_test, cv_fold, save_path=save_path, only_eval=skip_exist)
     return C.get()['model']['type'], cv_fold, result
 
@@ -177,11 +176,11 @@ if __name__ == '__main__':
     logger.info('search augmentation policies, dataset=%s model=%s' % (C.get()['dataset'], C.get()['model']['type']))
     logger.info('----- Train without Augmentations cv=%d ratio(test)=%.1f -----' % (cv_num, args.cv_ratio))
     w.start(tag='train_no_aug')
-    paths = [_get_path(C.get()['dataset'], C.get()['model']['type'], 'ratio%.1f_fold%d' % (args.cv_ratio, i)) for i in
+    paths = [ _get_path(C.get()['dataset'], C.get()['model']['type'], 'ratio%.1f_fold%d' % (args.cv_ratio, i)) for i in
              range(cv_num)]
-    print(paths)
 
-    pretrain_results = [ train_model(copy.deepcopy(copied_c), args.dataroot, C.get()['aug'], args.cv_ratio, i, save_path=paths[i], skip_exist=True) for i in range(cv_num)]
+
+    pretrain_results = [ train_model(copy.deepcopy(copied_c), args.dataroot, C.get()['aug'], args.cv_ratio, i, save_path=paths[i], skip_exist=False) for i in range(cv_num)]
 
     tqdm_epoch = tqdm(range(C.get()['epoch']))
     is_done = False
@@ -198,18 +197,19 @@ if __name__ == '__main__':
                     epochs_per_cv['cv%d' % (cv_idx + 1)] = latest_ckpt['epoch']
                 except Exception as e:
                     continue
-            tqdm_epoch.set_postfix(epochs_per_cv)
+            tqdm_epoch.set_postfix(epochs_per_cv,cv_num)
+
             if len(epochs_per_cv) == cv_num and min(epochs_per_cv.values()) >= C.get()['epoch']:
                 is_done = True
             if len(epochs_per_cv) == cv_num and min(epochs_per_cv.values()) >= epoch:
                 break
             time.sleep(1)
-            print('yahoo')
         if is_done:
             break
 
+    exit()
     logger.info('getting results...')
-
+    pretrain_results = [ train_model(copy.deepcopy(copied_c), args.dataroot, C.get()['aug'], args.cv_ratio, i, save_path=paths[i], skip_exist=True) for i in range(cv_num)]
 
     for r_model, r_cv, r_dict in pretrain_results:
         logger.info('model=%s cv=%d top1_train=%.4f top1_valid=%.4f' % (
