@@ -3,21 +3,21 @@ model:
 dataset: reduced_gta5
 cutout: 80
 aug: default
-batch: 4
-epoch: 10
-lr: 0.002     # 0.256 for 4096 batch
+batch: 16
+epoch: 50
+lr: 0.1     # 0.256 for 4096 batch
 lr_schedule:
   type: 'efficientnet'
   warmup:
     multiplier: 1
     epoch: 5
 optimizer:
-  type: rmsprop
-  decay: 0.00001
-  clip: 0
+  type: sgd
+  nesterov: True
+  decay: 0.0002
   ema: 0.9999
   ema_interval: -1
 class_weighting: enet
 task: segmentation
 ignore_label: 19
-sample_train: 200
+sample_train: 500

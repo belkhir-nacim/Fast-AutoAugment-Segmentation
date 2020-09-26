@@ -25,6 +25,7 @@ from FastAutoAugment.metrics import Accumulator
 from FastAutoAugment.networks import get_model, num_class
 from FastAutoAugment.train import train_and_eval
 from theconf import Config as C, ConfigArgumentParser
+from FastAutoAugment.metrics import IoU
 
 top1_valid_by_cv = defaultdict(lambda: list)
 
@@ -94,7 +95,12 @@ def eval_tta(config, augment):
 
     start_t = time.time()
     metrics = Accumulator()
-    loss_fn = torch.nn.CrossEntropyLoss(reduction='none')
+    if C.get().conf.get('task', 'classification') == 'segmentation':
+        loss_fn = torch.nn.CrossEntropyLoss(reduction='none')
+        iou_meter = IoU(num_classes=num_class(C.get()['dataset']), ignore_index=C.get().conf.get('ignore_label', 255))
+        iou_meter.reset()
+    else:
+        loss_fn = torch.nn.CrossEntropyLoss(reduction='none')
     try:
         while True:
             losses = []
@@ -103,34 +109,36 @@ def eval_tta(config, augment):
                 data, label = next(loader)
                 data = data.cuda()
                 label = label.cuda()
-
                 pred = model(data)
-
                 loss = loss_fn(pred, label)
                 losses.append(loss.detach().cpu().numpy())
-
-                _, pred = pred.topk(1, 1, True, True)
-                pred = pred.t()
-                correct = pred.eq(label.view(1, -1).expand_as(pred)).detach().cpu().numpy()
-                corrects.append(correct)
-                del loss, correct, pred, data, label
-
+                if C.get().conf.get('task', 'classification') == 'segmentation':
+                    iou_meter.add(predicted=pred.detach().cpu().numpy(), target=label.detach().cpu().numpy())
+                else:
+                    _, pred = pred.topk(1, 1, True, True)
+                    pred = pred.t()
+                    correct = pred.eq(label.view(1, -1).expand_as(pred)).detach().cpu().numpy()
+                    corrects.append(correct)
+                    del correct
+                del loss, pred, data, label
             losses = np.concatenate(losses)
             losses_min = np.min(losses, axis=0).squeeze()
 
-            corrects = np.concatenate(corrects)
-            corrects_max = np.max(corrects, axis=0).squeeze()
-            metrics.add_dict({
-                'minus_loss': -1 * np.sum(losses_min),
-                'correct': np.sum(corrects_max),
-                'cnt': len(corrects_max)
-            })
-            del corrects, corrects_max
+            if C.get().conf.get('task', 'classification') == 'segmentation':
+                metrics.add_dict({'minus_loss': -1 * np.sum(losses_min)})
+            else:
+                corrects = np.concatenate(corrects)
+                corrects_max = np.max(corrects, axis=0).squeeze()
+                metrics.add_dict( {'minus_loss': -1 * np.sum(losses_min), 'correct': np.sum(corrects_max),
+                                    'cnt': len(corrects_max)})
+                del corrects, corrects_max
     except StopIteration:
         pass
 
     del model
     metrics = metrics / 'cnt'
+    if C.get().conf.get('task', 'classification') == 'segmentation':
+        metrics.metrics['correct'] = iou_meter.value()[1]  # iou_meter.value()[1]
     gpu_secs = (time.time() - start_t) * torch.cuda.device_count()
     # reporter(minus_loss=metrics['minus_loss'], top1_valid=metrics['correct'], elapsed_time=gpu_secs, done=True)
     tune.track.log(minus_loss=metrics['minus_loss'], top1_valid=metrics['correct'], elapsed_time=gpu_secs, done=True)
@@ -163,7 +171,7 @@ if __name__ == '__main__':
         C.get()['optimizer']['decay'] = args.decay
 
     add_filehandler(logger, os.path.join('models', '%s_%s_cv%.1f.log' % (
-    C.get()['dataset'], C.get()['model']['type'], args.cv_ratio)))
+        C.get()['dataset'], C.get()['model']['type'], args.cv_ratio)))
     logger.info('configuration...')
     logger.info(json.dumps(C.get().conf, sort_keys=True, indent=4))
     logger.info('initialize ray...')
@@ -176,9 +184,8 @@ if __name__ == '__main__':
     logger.info('search augmentation policies, dataset=%s model=%s' % (C.get()['dataset'], C.get()['model']['type']))
     logger.info('----- Train without Augmentations cv=%d ratio(test)=%.1f -----' % (cv_num, args.cv_ratio))
     w.start(tag='train_no_aug')
-    paths = [ _get_path(C.get()['dataset'], C.get()['model']['type'], 'ratio%.1f_fold%d' % (args.cv_ratio, i)) for i in
+    paths = [_get_path(C.get()['dataset'], C.get()['model']['type'], 'ratio%.1f_fold%d' % (args.cv_ratio, i)) for i in
              range(cv_num)]
-
 
     # pretrain_results = [ train_model(copy.deepcopy(copied_c), args.dataroot, C.get()['aug'], args.cv_ratio, i, save_path=paths[i], skip_exist=False) for i in range(cv_num)]
 
@@ -197,7 +204,7 @@ if __name__ == '__main__':
                     epochs_per_cv['cv%d' % (cv_idx + 1)] = latest_ckpt['epoch']
                 except Exception as e:
                     continue
-            tqdm_epoch.set_postfix(epochs_per_cv,cv_num)
+            tqdm_epoch.set_postfix(epochs_per_cv, cv_num)
 
             if len(epochs_per_cv) == cv_num and min(epochs_per_cv.values()) >= C.get()['epoch']:
                 is_done = True
@@ -208,11 +215,13 @@ if __name__ == '__main__':
             break
 
     logger.info('getting results...')
-    pretrain_results = [ train_model(copy.deepcopy(copied_c), args.dataroot, C.get()['aug'], args.cv_ratio, i, save_path=paths[i], skip_exist=True) for i in range(cv_num)]
+    pretrain_results = [
+        train_model(copy.deepcopy(copied_c), args.dataroot, C.get()['aug'], args.cv_ratio, i, save_path=paths[i],
+                    skip_exist=True) for i in range(cv_num)]
 
     for r_model, r_cv, r_dict in pretrain_results:
         logger.info('model=%s cv=%d top1_train=%.4f top1_valid=%.4f' % (
-        r_model, r_cv + 1, r_dict['top1_train'], r_dict['top1_valid']))
+            r_model, r_cv + 1, r_dict['top1_train'], r_dict['top1_valid']))
     logger.info('processed in %.4f secs' % w.pause('train_no_aug'))
 
     if args.until == 1:
@@ -229,9 +238,11 @@ if __name__ == '__main__':
             space['prob_%d_%d' % (i, j)] = hp.uniform('prob_%d_ %d' % (i, j), 0.0, 1.0)
             space['level_%d_%d' % (i, j)] = hp.uniform('level_%d_ %d' % (i, j), 0.0, 1.0)
 
+
     def eval_t(augs):
         print(augs)
         return eval_tta(copy.deepcopy(copied_c), augs)
+
 
     final_policy_set = []
     total_computation = 0
@@ -239,7 +250,7 @@ if __name__ == '__main__':
     for _ in range(1):  # run multiple times.
         for cv_fold in range(cv_num):
             name = "search_%s_%s_fold%d_ratio%.1f" % (
-            C.get()['dataset'], C.get()['model']['type'], cv_fold, args.cv_ratio)
+                C.get()['dataset'], C.get()['model']['type'], cv_fold, args.cv_ratio)
             print(name)
             algo = HyperOptSearch(space, max_concurrent=1, metric=reward_attr)
             aug_config = {
@@ -250,7 +261,8 @@ if __name__ == '__main__':
             num_samples = 4 if args.smoke_test else args.num_search
 
             print(aug_config)
-            results = run(eval_t, search_alg=algo, config=aug_config, num_samples=num_samples, resources_per_trial={'gpu': 1}, stop={'training_iteration': args.num_policy})
+            results = run(eval_t, search_alg=algo, config=aug_config, num_samples=num_samples,
+                          resources_per_trial={'gpu': 1}, stop={'training_iteration': args.num_policy})
             dataframe = results.dataframe().sort_values(reward_attr, ascending=False)
             total_computation = dataframe['elapsed_time'].sum()
             for i in range(num_result_per_cv):
@@ -261,7 +273,7 @@ if __name__ == '__main__':
                     new_config_dict[key] = config_dict['config/' + key]
                 final_policy = policy_decoder(new_config_dict, args.num_policy, args.num_op)
                 logger.info('loss=%.12f top1_valid=%.4f %s' % (
-                dataframe.loc[i]['minus_loss'].item(), dataframe.loc[i]['top1_valid'].item(), final_policy))
+                    dataframe.loc[i]['minus_loss'].item(), dataframe.loc[i]['top1_valid'].item(), final_policy))
 
                 final_policy = remove_deplicates(final_policy)
                 final_policy_set.extend(final_policy)
@@ -270,7 +282,7 @@ if __name__ == '__main__':
     logger.info('final_policy=%d' % len(final_policy_set))
     logger.info('processed in %.4f secs, gpu hours=%.4f' % (w.pause('search'), total_computation / 3600.))
     logger.info('----- Train with Augmentations model=%s dataset=%s aug=%s ratio(test)=%.1f -----' % (
-    C.get()['model']['type'], C.get()['dataset'], C.get()['aug'], args.cv_ratio))
+        C.get()['model']['type'], C.get()['dataset'], C.get()['aug'], args.cv_ratio))
     w.start(tag='train_aug')
 
     num_experiments = 5
@@ -314,9 +326,9 @@ if __name__ == '__main__':
 
     logger.info('getting results...')
     final_results = [train_model(copy.deepcopy(copied_c), args.dataroot, C.get()['aug'], 0.0, 0,
-                               save_path=default_path[_], skip_exist=True) for _ in range(num_experiments)] + \
-           [train_model(copy.deepcopy(copied_c), args.dataroot, final_policy_set, 0.0, 0,
-                               save_path=augment_path[_]) for _ in range(num_experiments)]
+                                 save_path=default_path[_], skip_exist=True) for _ in range(num_experiments)] + \
+                    [train_model(copy.deepcopy(copied_c), args.dataroot, final_policy_set, 0.0, 0,
+                                 save_path=augment_path[_]) for _ in range(num_experiments)]
 
     for train_mode in ['default', 'augment']:
         avg = 0.

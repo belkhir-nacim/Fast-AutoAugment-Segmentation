@@ -203,6 +203,9 @@ def train_and_eval(tag, dataroot, test_ratio=0.0, cv_fold=0, reporter=None, metr
     elif lr_scheduler_type == 'efficientnet':
         scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lambda x: 0.97 ** int(
             (x + C.get()['lr_schedule']['warmup']['epoch']) / 2.4))
+    elif lr_scheduler_type == 'steplr':
+        scheduler = torch.optim.lr_scheduler.StepLR(optimizer=optimizer, step_size=C.get().conf.get('step_lr', 4),
+                                                    gamma=C.get().conf.get('lr_decay', 0.1))
     elif lr_scheduler_type == 'none':
         scheduler = None
     else:
