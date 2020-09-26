@@ -91,7 +91,7 @@ def run_epoch(model, loader, loss_fn, optimizer, desc_default='', epoch=0, write
         if verbose:
             postfix = metrics / cnt
             if C.get().conf.get('task', 'classification') == 'segmentation':
-                postfix['iou'] = iou_meter.value()[1]
+                postfix['top1'] = iou_meter.value()[1]
             if optimizer:
                 postfix['lr'] = optimizer.param_groups[0]['lr']
             postfix['loss_ema'] = loss_ema
@@ -103,20 +103,22 @@ def run_epoch(model, loader, loss_fn, optimizer, desc_default='', epoch=0, write
     if tqdm_disabled and verbose:
         if optimizer:
             if C.get().conf.get('task', 'classification') == 'segmentation':
-                logger.info('[%s %03d/%03d] %s  iou==%.6f  lr=%.6f', desc_default, epoch, C.get()['epoch'], metrics / cnt, iou_meter.value()[1],
+                logger.info('[%s %03d/%03d] %s  iou==%.6f  lr=%.6f', desc_default, epoch, C.get()['epoch'],
+                            metrics / cnt, iou_meter.value()[1],
                             optimizer.param_groups[0]['lr'])
             else:
                 logger.info('[%s %03d/%03d] %s lr=%.6f', desc_default, epoch, C.get()['epoch'], metrics / cnt,
                             optimizer.param_groups[0]['lr'])
         else:
             if C.get().conf.get('task', 'classification') == 'segmentation':
-                logger.info('[%s %03d/%03d] %s iou==%.6f', desc_default, epoch, C.get()['epoch'], metrics / cnt,iou_meter.value()[1])
+                logger.info('[%s %03d/%03d] %s iou==%.6f', desc_default, epoch, C.get()['epoch'], metrics / cnt,
+                            iou_meter.value()[1])
             else:
                 logger.info('[%s %03d/%03d] %s', desc_default, epoch, C.get()['epoch'], metrics / cnt)
 
     metrics /= cnt
     if C.get().conf.get('task', 'classification') == 'segmentation':
-        metrics.metrics['miou'] = iou_meter.value()[1]
+        metrics.metrics['top1'] = iou_meter.value()[1]  # iou_meter.value()[1]
     if optimizer:
         metrics.metrics['lr'] = optimizer.param_groups[0]['lr']
     if verbose:
@@ -139,6 +141,7 @@ def train_and_eval(tag, dataroot, test_ratio=0.0, cv_fold=0, reporter=None, metr
         total_batch = C.get()["batch"] * dist.get_world_size()
 
     is_master = local_rank < 0 or dist.get_rank() == 0
+
     if is_master:
         add_filehandler(logger, 'master' + '.log')
 
@@ -176,6 +179,7 @@ def train_and_eval(tag, dataroot, test_ratio=0.0, cv_fold=0, reporter=None, metr
                                                            C.get().conf.get('lb_smooth', 0))
         if C.get().conf.get('mixup', 0.0) > 0.0:
             criterion = CrossEntropyMixUpLabelSmooth(num_class(C.get()['dataset']), C.get().conf.get('lb_smooth', 0))
+
     if C.get()['optimizer']['type'] == 'sgd':
         optimizer = optim.SGD(model.parameters(), lr=C.get()['lr'], momentum=C.get()['optimizer'].get('momentum', 0.9),
                               weight_decay=0.0, nesterov=C.get()['optimizer'].get('nesterov', True))
@@ -185,9 +189,9 @@ def train_and_eval(tag, dataroot, test_ratio=0.0, cv_fold=0, reporter=None, metr
     elif C.get()['optimizer']['type'] == 'adam':
         from torch.optim import Adam
         optimizer = Adam(model.parameters(), lr=C.get()['lr'], weight_decay=0.0, eps=0.001)
-    elif C.get()['optimizer']['type'] == 'ranger'   :
+    elif C.get()['optimizer']['type'] == 'ranger':
         from FastAutoAugment.optim import Ranger
-        optimizer = Ranger(model.parameters(), lr=C.get()['lr'], weight_decay=1e-4, alpha=0.9,  eps=0.001)
+        optimizer = Ranger(model.parameters(), lr=C.get()['lr'], weight_decay=1e-4, alpha=0.9, eps=0.001)
     else:
         raise ValueError('invalid optimizer type=%s' % C.get()['optimizer']['type'])
 
@@ -208,7 +212,6 @@ def train_and_eval(tag, dataroot, test_ratio=0.0, cv_fold=0, reporter=None, metr
         scheduler = GradualWarmupScheduler(optimizer, multiplier=C.get()['lr_schedule']['warmup']['multiplier'],
                                            total_epoch=C.get()['lr_schedule']['warmup']['epoch'],
                                            after_scheduler=scheduler)
-
     if not tag or not is_master:
         from FastAutoAugment.metrics import SummaryWriterDummy as SummaryWriter
         logger.warning('tag not provided, no tensorboard log.')
@@ -295,7 +298,7 @@ def train_and_eval(tag, dataroot, test_ratio=0.0, cv_fold=0, reporter=None, metr
         return result
 
     # train loop
-    best_top1 = 0
+    best_top1 = -1000
     for epoch in range(epoch_start, max_epoch + 1):
         if local_rank >= 0:
             trainsampler.set_epoch(epoch)
@@ -322,6 +325,7 @@ def train_and_eval(tag, dataroot, test_ratio=0.0, cv_fold=0, reporter=None, metr
             logger.info(f'ema synced- rank={dist.get_rank()}')
 
         if is_master and (epoch % evaluation_interval == 0 or epoch == max_epoch):
+            print('how many times we get inside', is_master, epoch % evaluation_interval, epoch == max_epoch)
             with torch.no_grad():
                 rs['valid'] = run_epoch(model, validloader, criterion_ce, None, desc_default='valid', epoch=epoch,
                                         writer=writers[1], verbose=is_master, tqdm_disabled=tqdm_disabled)
@@ -337,43 +341,48 @@ def train_and_eval(tag, dataroot, test_ratio=0.0, cv_fold=0, reporter=None, metr
                                            epoch=epoch, writer=writers[2], verbose=is_master,
                                            tqdm_disabled=tqdm_disabled)
 
+            # if C.get().conf.get('task', 'classification') == 'segmentation':
+            #     print('fuck me seg')
+            #     logger.info(
+            #         f'epoch={epoch} '
+            #         f'[train] loss={rs["train"]["loss"]:.4f} top1={rs["train"]["top1"]:.4f} '
+            #         f'[valid] loss={rs["valid"]["loss"]:.4f} top1={rs["valid"]["top1"]:.4f} '
+            #         f'[test] loss={rs["test"]["loss"]:.4f} top1={rs["test"]["top1"]:.4f} ')
+            #     main_metric = 'iou'
+            # else:
+            # print('fuck me classif')
             logger.info(
                 f'epoch={epoch} '
                 f'[train] loss={rs["train"]["loss"]:.4f} top1={rs["train"]["top1"]:.4f} '
                 f'[valid] loss={rs["valid"]["loss"]:.4f} top1={rs["valid"]["top1"]:.4f} '
-                f'[test] loss={rs["test"]["loss"]:.4f} top1={rs["test"]["top1"]:.4f} '
-            )
+                f'[test] loss={rs["test"]["loss"]:.4f} top1={rs["test"]["top1"]:.4f} ')
+            main_metric = 'top1'
 
-            if metric == 'last' or rs[metric]['top1'] > best_top1:
+            if metric == 'last' or rs[metric][main_metric] > best_top1:
+                print('compute best')
                 if metric != 'last':
-                    best_top1 = rs[metric]['top1']
+                    best_top1 = rs[metric][main_metric]
                 for key, setname in itertools.product(['loss', 'top1', 'top5'], ['train', 'valid', 'test']):
                     result['%s_%s' % (key, setname)] = rs[setname][key]
                 result['epoch'] = epoch
 
-                writers[1].add_scalar('valid_top1/best', rs['valid']['top1'], epoch)
-                writers[2].add_scalar('test_top1/best', rs['test']['top1'], epoch)
+                writers[1].add_scalar(f'valid_{main_metric}/best', rs['valid'][main_metric], epoch)
+                writers[2].add_scalar(f'test_{main_metric}/best', rs['test'][main_metric], epoch)
 
-                reporter(
-                    loss_valid=rs['valid']['loss'], top1_valid=rs['valid']['top1'],
-                    loss_test=rs['test']['loss'], top1_test=rs['test']['top1']
-                )
-
+                reporter(loss_valid=rs['valid']['loss'], top1_valid=rs['valid'][main_metric],
+                         loss_test=rs['test']['loss'], top1_test=rs['test'][main_metric])
                 # save checkpoint
+                print(is_master and save_path, 'before save')
                 if is_master and save_path:
                     logger.info('save model@%d to %s, err=%.4f' % (epoch, save_path, 1 - best_top1))
                     torch.save({
                         'epoch': epoch,
-                        'log': {
-                            'train': rs['train'].get_dict(),
-                            'valid': rs['valid'].get_dict(),
-                            'test': rs['test'].get_dict(),
-                        },
+                        'log': {'train': rs['train'].get_dict(), 'valid': rs['valid'].get_dict(),
+                                'test': rs['test'].get_dict(), },
                         'optimizer': optimizer.state_dict(),
                         'model': model.state_dict(),
                         'ema': ema.state_dict() if ema is not None else None,
                     }, save_path)
-
     del model
 
     result['top1_test'] = best_top1
@@ -385,7 +394,7 @@ if __name__ == '__main__':
     parser.add_argument('--tag', type=str, default='')
     parser.add_argument('--dataroot', type=str, default='/data/private/pretrainedmodels',
                         help='torchvision data folder')
-    parser.add_argument('--save', type=str, default='test.pth')
+    parser.add_argument('--save', type=str, default='NACIMtest.pth')
     parser.add_argument('--cv-ratio', type=float, default=0.0)
     parser.add_argument('--cv', type=int, default=0)
     parser.add_argument('--local_rank', type=int, default=-1)

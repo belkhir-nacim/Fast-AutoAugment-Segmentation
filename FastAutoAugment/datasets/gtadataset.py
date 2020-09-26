@@ -5,8 +5,8 @@ import os
 import torch
 import torch.utils.data as data
 import torchvision.transforms as transforms
-import torchvision.transforms.functional as TF
-from FastAutoAugment.transforms_target import  PILToLongTensor
+from FastAutoAugment.transforms_target import PILToLongTensor
+
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 IMG_MEAN = np.array((104.00698793, 116.66876762, 122.67891434), dtype=np.float32)
 NUM_CLASSES = 19
@@ -101,7 +101,9 @@ class GTA5_Dataset(data.Dataset):
         assert os.path.exists(item_list_filepath)
         self.img_archive, self.image_filepath = self.open_zip(self.img_path_zip)
         self.gt_archive, self.gt_filepath = self.open_zip(self.gt_path_zip)
-        self.items = np.array([int(id.strip()) for id in open(item_list_filepath)])
+        test_id_issue = [20801, 20802, 20835, 20836, 20837, 20838, 20839, 20840, 20841, 20842, 20843, 20844, 20845,
+                         20846, 20847, 20848, 20849, 20850, 20851, 20852, 20853, 20854, 20855, 20856, 20857]
+        self.items = np.array([int(id.strip()) for id in open(item_list_filepath) if int(id.strip()) not in test_id_issue])
         if sample == 'full':
             pass
         else:
@@ -112,14 +114,14 @@ class GTA5_Dataset(data.Dataset):
                 self.items = rang.choice(self.items, sample, replace=False)
 
         # self.id_to_trainid = {7: 0,8: 1,11: 2,12: 3,13: 4,17: 5,19: 6,20: 7,21: 8,22: 9,23: 10,24: 11,25: 12,26: 13,27: 14,28: 15,31: 16,32: 17,33: 18,34: 13}
-        self.id_to_trainid = d = {7: 0, 8: 1, 11: 2, 12: 3, 13: 4, 17: 5, 18: 5, 19: 6, 20: 7, 21: 8, 22: 9, 23: 10,
-                                  24: 11, 25: 12, 26: 13, 34: 13, 27: 14, 28: 15, 31: 16,
-                                  32: 17, 33: 18, 0: 19, 1: 19, 2: 19, 3: 19, 4: 19, 5: 19, 6: 19, 9: 19, 10: 19,
-                                  14: 19, 15: 19, 16: 19, 29: 19, 30: 19}
+        self.id_to_trainid = {7: 0, 8: 1, 11: 2, 12: 3, 13: 4, 17: 5, 18: 5, 19: 6, 20: 7, 21: 8, 22: 9, 23: 10,
+                              24: 11, 25: 12, 26: 13, 34: 13, 27: 14, 28: 15, 31: 16,
+                              32: 17, 33: 18, 0: 19, 1: 19, 2: 19, 3: 19, 4: 19, 5: 19, 6: 19, 9: 19, 10: 19,
+                              14: 19, 15: 19, 16: 19, 29: 19, 30: 19}
 
         self.transform_after = transform_after if transform_after is not None else transforms.ToTensor()
-        self.transform_target_after = transform_target_after if transform_target_after is not None  else PILToLongTensor()
-        self.transfom_pre = transform_pre if transform_pre  is not None else None
+        self.transform_target_after = transform_target_after if transform_target_after is not None else PILToLongTensor()
+        self.transfom_pre = transform_pre if transform_pre is not None else None
 
         print("{} num images in GTA5 {} set have been loaded.".format(len(self.items), self.split))
 
@@ -134,11 +136,10 @@ class GTA5_Dataset(data.Dataset):
         gt = Image.open(self.gt_archive.open(os.path.join(self.gt_filepath, "{:0>5d}.png".format(id))))
         gt = self._mask_transform(gt)
 
-        if self.transfom_pre is not None :
-            image, gt = self.transfom_pre(image ,gt )
+        if self.transfom_pre is not None:
+            image, gt = self.transfom_pre(image, gt)
         image = self.transform_after(image)
         gt = self.transform_target_after(gt)
-
         return image, gt
 
     def _mask_transform(self, gt_image):  # check if cross entropy ask from long or float
@@ -155,6 +156,7 @@ class GTA5_Dataset(data.Dataset):
 
     def __len__(self):
         return self.items.shape[0]
+
 
 # '''
 # 7 -- road                 	 [128.  64, 128]  7 : 0
@@ -197,3 +199,19 @@ class GTA5_Dataset(data.Dataset):
 #
 # d = {7: 0, 8: 1, 11: 2, 12: 3, 13: 4, 17: 5, 18: 5, 19: 6, 20: 7, 21: 8, 22: 9, 23: 10, 24: 11, 25: 12, 26: 13, 34: 13, 27: 14, 28: 15, 31: 16,
 #      32: 17, 33: 18, 0: 19, 1: 19, 2: 19, 3: 19, 4: 19, 5: 19, 6: 19, 9: 19, 10: 19, 14: 19, 15: 19, 16: 19, 29: 19, 30: 19}
+
+
+if __name__ == '__main__':
+
+    from FastAutoAugment.joint_transform import  CenterCropPad
+
+
+    dataset = GTA5_Dataset(data_root_path='C:\\Users\\Nacim\\Documents\\DATASET\\GTA5', split='test', sample='full',transform_pre=CenterCropPad((800,435),19))
+    for data in data.DataLoader(dataset, batch_size=100, shuffle=False, drop_last=False,num_workers=0):
+        img, mask, id = data
+        if (img.shape[2] != mask.shape[1]):  # and img.shape[3] != mask.shape[2]:
+            print(img.shape, mask.shape)
+            print(id)
+        if (img.shape[3] != mask.shape[2]):  # and img.shape[3] != mask.shape[2]:
+            print(img.shape, mask.shape)
+            print(id)

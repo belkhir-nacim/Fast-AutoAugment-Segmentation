@@ -180,7 +180,7 @@ if __name__ == '__main__':
              range(cv_num)]
 
 
-    pretrain_results = [ train_model(copy.deepcopy(copied_c), args.dataroot, C.get()['aug'], args.cv_ratio, i, save_path=paths[i], skip_exist=False) for i in range(cv_num)]
+    # pretrain_results = [ train_model(copy.deepcopy(copied_c), args.dataroot, C.get()['aug'], args.cv_ratio, i, save_path=paths[i], skip_exist=False) for i in range(cv_num)]
 
     tqdm_epoch = tqdm(range(C.get()['epoch']))
     is_done = False
@@ -207,7 +207,6 @@ if __name__ == '__main__':
         if is_done:
             break
 
-    exit()
     logger.info('getting results...')
     pretrain_results = [ train_model(copy.deepcopy(copied_c), args.dataroot, C.get()['aug'], args.cv_ratio, i, save_path=paths[i], skip_exist=True) for i in range(cv_num)]
 
