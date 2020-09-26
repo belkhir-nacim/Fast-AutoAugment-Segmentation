@@ -170,6 +170,7 @@ if __name__ == '__main__':
         logger.info('decay=%.4f' % args.decay)
         C.get()['optimizer']['decay'] = args.decay
 
+    if not os.path.exists('models'): os.makedirs('models')
     add_filehandler(logger, os.path.join('models', '%s_%s_cv%.1f.log' % (
         C.get()['dataset'], C.get()['model']['type'], args.cv_ratio)))
     logger.info('configuration...')
