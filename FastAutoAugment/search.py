@@ -13,7 +13,7 @@ from ray.tune.trial import Trial
 from ray.tune.trial_runner import TrialRunner
 # from ray.tune.suggest import HyperOptSearch
 from ray.tune.suggest.hyperopt import HyperOptSearch
-from ray.tune import run
+from ray.tune import run, register_trainable, run_experiments
 from ray import tune
 from tqdm import tqdm
 
@@ -21,11 +21,10 @@ from FastAutoAugment.archive import remove_deplicates, policy_decoder
 from FastAutoAugment.augmentations import augment_list
 from FastAutoAugment.common import get_logger, add_filehandler
 from FastAutoAugment.datasets.data import get_dataloaders
-from FastAutoAugment.metrics import Accumulator
+from FastAutoAugment.metrics import Accumulator, IoU, CrossEntropyLoss2d
 from FastAutoAugment.networks import get_model, num_class
 from FastAutoAugment.train import train_and_eval
 from theconf import Config as C, ConfigArgumentParser
-from FastAutoAugment.metrics import IoU
 
 top1_valid_by_cv = defaultdict(lambda: list)
 
@@ -69,6 +68,7 @@ def train_model(config, dataroot, augment, cv_ratio_test, cv_fold, save_path=Non
 
 
 # def eval_tta(config, augment, reporter):
+@torch.no_grad()
 def eval_tta(config, augment):
     C.get()
     C.get().conf = config
@@ -85,6 +85,10 @@ def eval_tta(config, augment):
     else:
         model.load_state_dict(ckpt)
     model.eval()
+    if torch.cuda.is_available():
+        model = model.to('cuda')
+    else:
+        model = model.to('cpu')
 
     loaders = []
     for _ in range(augment['num_policy']):  # TODO
@@ -96,7 +100,20 @@ def eval_tta(config, augment):
     start_t = time.time()
     metrics = Accumulator()
     if C.get().conf.get('task', 'classification') == 'segmentation':
-        loss_fn = torch.nn.CrossEntropyLoss(reduction='none')
+        if C.get().conf.get('class_weighting', None) is not None:
+            class_weights = np.array([50.49834979, 50.49834979, 50.49834979, 50.49834979, 50.49834979, 50.49834979,
+                                      50.49834979, 47.99808548, 11.16006873, 50.49834979, 50.49834979, 41.33217048,
+                                      49.37316491, 18.7447425, 50.49834979, 50.49834979, 50.49834979, 49.47531584,
+                                      50.17345895, 0.])
+            if class_weights is not None:
+                if C.get().conf.get('ignore_label', 1000) < num_class(C.get()['dataset']):
+                    class_weights[C.get().conf.get('ignore_label', 1000)] = 0
+                class_weights = torch.from_numpy(class_weights).float()
+                if torch.cuda.is_available():
+                    class_weights = class_weights.to('cuda')
+        else:
+            class_weights = None
+        loss_fn = CrossEntropyLoss2d(weight=class_weights, ignore_label=C.get().conf.get('ignore_label', 255))
         iou_meter = IoU(num_classes=num_class(C.get()['dataset']), ignore_index=C.get().conf.get('ignore_label', 255))
         iou_meter.reset()
     else:
@@ -107,8 +124,9 @@ def eval_tta(config, augment):
             corrects = []
             for loader in loaders:
                 data, label = next(loader)
-                data = data.cuda()
-                label = label.cuda()
+                if torch.cuda.is_available():
+                    data, label = data.cuda(), label.cuda()
+
                 pred = model(data)
                 loss = loss_fn(pred, label)
                 losses.append(loss.detach().cpu().numpy())
@@ -129,8 +147,8 @@ def eval_tta(config, augment):
             else:
                 corrects = np.concatenate(corrects)
                 corrects_max = np.max(corrects, axis=0).squeeze()
-                metrics.add_dict( {'minus_loss': -1 * np.sum(losses_min), 'correct': np.sum(corrects_max),
-                                    'cnt': len(corrects_max)})
+                metrics.add_dict({'minus_loss': -1 * np.sum(losses_min), 'correct': np.sum(corrects_max),
+                                  'cnt': len(corrects_max)})
                 del corrects, corrects_max
     except StopIteration:
         pass
@@ -139,6 +157,8 @@ def eval_tta(config, augment):
     metrics = metrics / 'cnt'
     if C.get().conf.get('task', 'classification') == 'segmentation':
         metrics.metrics['correct'] = iou_meter.value()[1]  # iou_meter.value()[1]
+        print(iou_meter.value()[1], 'yahooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooo')
+
     gpu_secs = (time.time() - start_t) * torch.cuda.device_count()
     # reporter(minus_loss=metrics['minus_loss'], top1_valid=metrics['correct'], elapsed_time=gpu_secs, done=True)
     tune.track.log(minus_loss=metrics['minus_loss'], top1_valid=metrics['correct'], elapsed_time=gpu_secs, done=True)
@@ -188,7 +208,7 @@ if __name__ == '__main__':
     paths = [_get_path(C.get()['dataset'], C.get()['model']['type'], 'ratio%.1f_fold%d' % (args.cv_ratio, i)) for i in
              range(cv_num)]
 
-    # pretrain_results = [ train_model(copy.deepcopy(copied_c), args.dataroot, C.get()['aug'], args.cv_ratio, i, save_path=paths[i], skip_exist=False) for i in range(cv_num)]
+    pretrain_results = [ train_model(copy.deepcopy(copied_c), args.dataroot, C.get()['aug'], args.cv_ratio, i, save_path=paths[i], skip_exist=False) for i in range(cv_num)]
 
     tqdm_epoch = tqdm(range(C.get()['epoch']))
     is_done = False
@@ -216,8 +236,7 @@ if __name__ == '__main__':
             break
 
     logger.info('getting results...')
-    pretrain_results = [
-        train_model(copy.deepcopy(copied_c), args.dataroot, C.get()['aug'], args.cv_ratio, i, save_path=paths[i],
+    pretrain_results = [ train_model(copy.deepcopy(copied_c), args.dataroot, C.get()['aug'], args.cv_ratio, i, save_path=paths[i],
                     skip_exist=True) for i in range(cv_num)]
 
     for r_model, r_cv, r_dict in pretrain_results:
@@ -253,17 +272,33 @@ if __name__ == '__main__':
             name = "search_%s_%s_fold%d_ratio%.1f" % (
                 C.get()['dataset'], C.get()['model']['type'], cv_fold, args.cv_ratio)
             print(name)
-            algo = HyperOptSearch(space, max_concurrent=1, metric=reward_attr)
+            register_trainable(name, eval_t)
+            algo = HyperOptSearch(space, metric=reward_attr)
             aug_config = {
                 'dataroot': args.dataroot, 'save_path': paths[cv_fold],
                 'cv_ratio_test': args.cv_ratio, 'cv_fold': cv_fold,
                 'num_op': args.num_op, 'num_policy': args.num_policy
             }
             num_samples = 4 if args.smoke_test else args.num_search
-
             print(aug_config)
-            results = run(eval_t, search_alg=algo, config=aug_config, num_samples=num_samples,
-                          resources_per_trial={'gpu': 1}, stop={'training_iteration': args.num_policy})
+
+            exp_config = {
+                name: {
+                    'run': name,
+                    'num_samples': 4 if args.smoke_test else args.num_search,
+                    'resources_per_trial': {'gpu': 1},
+                    'stop': {'training_iteration': args.num_policy},
+                    'config': {
+                        'dataroot': args.dataroot, 'save_path': paths[cv_fold],
+                        'cv_ratio_test': args.cv_ratio, 'cv_fold': cv_fold,
+                        'num_op': args.num_op, 'num_policy': args.num_policy
+                    },
+                }
+            }
+            algo = tune.suggest.ConcurrencyLimiter(algo,1)
+            results = run_experiments(exp_config, search_alg=algo, scheduler=None, verbose=0, queue_trials=True,sync_on_checkpoint= False, resume=args.resume, concurrent=False, raise_on_failed_trial=True)
+            results = run(eval_t, search_alg=algo, config=aug_config, num_samples=num_samples, sync_on_checkpoint=False,
+                          resources_per_trial={'gpu': 0.5},  stop={'training_iteration': args.num_policy})
             dataframe = results.dataframe().sort_values(reward_attr, ascending=False)
             total_computation = dataframe['elapsed_time'].sum()
             for i in range(num_result_per_cv):

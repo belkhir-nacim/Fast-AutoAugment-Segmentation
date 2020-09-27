@@ -165,6 +165,8 @@ def train_and_eval(tag, dataroot, test_ratio=0.0, cv_fold=0, reporter=None, metr
             if C.get().conf.get('ignore_label', 1000) < num_class(C.get()['dataset']):
                 class_weights[C.get().conf.get('ignore_label', 1000)] = 0
             class_weights = torch.from_numpy(class_weights).float().cuda()
+    else:
+        class_weights = None
 
     # create a model & an optimizer
     model = get_model(C.get()['model'], num_class(C.get()['dataset']), local_rank=local_rank)

@@ -3,7 +3,7 @@ model:
 dataset: reduced_gta5
 cutout: 80
 aug: default
-batch: 8
+batch: 16
 epoch: 10
 lr: 0.1     # 0.256 for 4096 batch
 lr_schedule:
