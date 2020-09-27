@@ -206,7 +206,7 @@ if __name__ == '__main__':
     from FastAutoAugment.joint_transform import  CenterCropPad
 
 
-    dataset = GTA5_Dataset(data_root_path='C:\\Users\\Nacim\\Documents\\DATASET\\GTA5', split='test', sample='full',transform_pre=CenterCropPad((800,435),19))
+    dataset = GTA5_Dataset(data_root_path='C:\\Users\\Nacim\\Documents\\DATASET\\GTA5', split='valid', sample='full',transform_pre=CenterCropPad((800,435),19))
     for data in data.DataLoader(dataset, batch_size=100, shuffle=False, drop_last=False,num_workers=0):
         img, mask, id = data
         if (img.shape[2] != mask.shape[1]):  # and img.shape[3] != mask.shape[2]:

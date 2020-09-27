@@ -25,7 +25,6 @@ from FastAutoAugment.metrics import Accumulator, IoU, CrossEntropyLoss2d
 from FastAutoAugment.networks import get_model, num_class
 from FastAutoAugment.train import train_and_eval
 from theconf import Config as C, ConfigArgumentParser
-
 top1_valid_by_cv = defaultdict(lambda: list)
 
 
@@ -113,7 +112,7 @@ def eval_tta(config, augment):
                     class_weights = class_weights.to('cuda')
         else:
             class_weights = None
-        loss_fn = CrossEntropyLoss2d(weight=class_weights, ignore_label=C.get().conf.get('ignore_label', 255))
+        loss_fn = CrossEntropyLoss2d(weight=class_weights, ignore_label=C.get().conf.get('ignore_label', 255),reduction='none')
         iou_meter = IoU(num_classes=num_class(C.get()['dataset']), ignore_index=C.get().conf.get('ignore_label', 255))
         iou_meter.reset()
     else:
@@ -129,21 +128,30 @@ def eval_tta(config, augment):
 
                 pred = model(data)
                 loss = loss_fn(pred, label)
-                losses.append(loss.detach().cpu().numpy())
+
                 if C.get().conf.get('task', 'classification') == 'segmentation':
-                    iou_meter.add(predicted=pred.detach().cpu().numpy(), target=label.detach().cpu().numpy())
+                    l = loss.view(loss.shape[0],-1).mean(1)
+                    losses.append(l.detach().cpu().numpy().reshape(1,-1))
+                    iou_meter.add(predicted=pred.detach(), target=label.detach().cpu())
                 else:
+                    losses.append(loss.detach().cpu().numpy())
                     _, pred = pred.topk(1, 1, True, True)
                     pred = pred.t()
                     correct = pred.eq(label.view(1, -1).expand_as(pred)).detach().cpu().numpy()
                     corrects.append(correct)
                     del correct
                 del loss, pred, data, label
-            losses = np.concatenate(losses)
-            losses_min = np.min(losses, axis=0).squeeze()
+            if C.get().conf.get('task', 'classification') == 'segmentation':
+                losses = np.concatenate(losses)
+                losses_min = np.min(losses, axis=0).squeeze()
+                print(losses_min, losses_min.shape)
+            else:
+                losses = np.concatenate(losses)
+                losses_min = np.min(losses, axis=0).squeeze()
 
             if C.get().conf.get('task', 'classification') == 'segmentation':
-                metrics.add_dict({'minus_loss': -1 * np.sum(losses_min)})
+                metrics.add_dict({'minus_loss': -1 * np.sum(losses_min),
+                                    'cnt': len(losses_min)})
             else:
                 corrects = np.concatenate(corrects)
                 corrects_max = np.max(corrects, axis=0).squeeze()
@@ -154,7 +162,7 @@ def eval_tta(config, augment):
         pass
 
     del model
-    metrics = metrics / 'cnt'
+    metrics = metrics / metrics['cnt']
     if C.get().conf.get('task', 'classification') == 'segmentation':
         metrics.metrics['correct'] = iou_meter.value()[1]  # iou_meter.value()[1]
         print(iou_meter.value()[1], 'yahooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooo')
@@ -208,7 +216,7 @@ if __name__ == '__main__':
     paths = [_get_path(C.get()['dataset'], C.get()['model']['type'], 'ratio%.1f_fold%d' % (args.cv_ratio, i)) for i in
              range(cv_num)]
 
-    pretrain_results = [ train_model(copy.deepcopy(copied_c), args.dataroot, C.get()['aug'], args.cv_ratio, i, save_path=paths[i], skip_exist=False) for i in range(cv_num)]
+    # pretrain_results = [ train_model(copy.deepcopy(copied_c), args.dataroot, C.get()['aug'], args.cv_ratio, i, save_path=paths[i], skip_exist=False) for i in range(cv_num)]
 
     tqdm_epoch = tqdm(range(C.get()['epoch']))
     is_done = False
@@ -236,14 +244,13 @@ if __name__ == '__main__':
             break
 
     logger.info('getting results...')
-    # This  can commented to avoid to take minutes to run evaluation again
-    pretrain_results = [ train_model(copy.deepcopy(copied_c), args.dataroot, C.get()['aug'], args.cv_ratio, i, save_path=paths[i],
-                    skip_exist=True) for i in range(cv_num)]
+    # pretrain_results = [ train_model(copy.deepcopy(copied_c), args.dataroot, C.get()['aug'], args.cv_ratio, i, save_path=paths[i],
+    #                 skip_exist=True) for i in range(cv_num)]
 
-    for r_model, r_cv, r_dict in pretrain_results:
-        logger.info('model=%s cv=%d top1_train=%.4f top1_valid=%.4f' % (
-            r_model, r_cv + 1, r_dict['top1_train'], r_dict['top1_valid']))
-    logger.info('processed in %.4f secs' % w.pause('train_no_aug'))
+    # for r_model, r_cv, r_dict in pretrain_results:
+    #     logger.info('model=%s cv=%d top1_train=%.4f top1_valid=%.4f' % (
+    #         r_model, r_cv + 1, r_dict['top1_train'], r_dict['top1_valid']))
+    # logger.info('processed in %.4f secs' % w.pause('train_no_aug'))
 
     if args.until == 1:
         sys.exit(0)
@@ -297,9 +304,9 @@ if __name__ == '__main__':
                 }
             }
             algo = tune.suggest.ConcurrencyLimiter(algo,1)
-            results = run_experiments(exp_config, search_alg=algo, scheduler=None, verbose=0, queue_trials=True,sync_on_checkpoint= False, resume=args.resume, concurrent=False, raise_on_failed_trial=True)
-            results = run(eval_t, search_alg=algo, config=aug_config, num_samples=num_samples, sync_on_checkpoint=False,
-                          resources_per_trial={'gpu': 0.5},  stop={'training_iteration': args.num_policy})
+            results = run_experiments(exp_config, search_alg=algo, scheduler=None, verbose=0, queue_trials=True, resume=args.resume, concurrent=False, raise_on_failed_trial=True)
+            # results = run(eval_t, search_alg=algo, config=aug_config, num_samples=num_samples, sync_on_checkpoint=False,
+            #               resources_per_trial={'gpu': 0.5},  stop={'training_iteration': args.num_policy})
             dataframe = results.dataframe().sort_values(reward_attr, ascending=False)
             total_computation = dataframe['elapsed_time'].sum()
             for i in range(num_result_per_cv):

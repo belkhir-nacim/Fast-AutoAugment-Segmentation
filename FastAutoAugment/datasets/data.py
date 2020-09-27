@@ -79,7 +79,7 @@ def get_dataloaders(dataset, batch, dataroot, split=0.15, split_idx=0, multinode
         crop_train = C.get().conf.get('crop_train',(321,321))
         crop_valid = C.get().conf.get('crop_valid',(321,321))
         transform_train_pre = Compose([RandomCrop(crop_train), RandomHorizontallyFlip()])  # weak transform
-        transform_valid_pre = Compose([ImgTargetCrop(crop_valid, 19)])  # weak transform
+        transform_valid_pre = Compose([RandomCrop(crop_valid)])  # weak transform
         transform_train = transforms.Compose([transforms.ToTensor()])
         # transform_test_pre = None  # Compose([RandomCrop((321, 321))])
         transform_test_pre = Compose([ImgTargetCrop((800, 435),19)])
