@@ -144,7 +144,6 @@ def eval_tta(config, augment):
             if C.get().conf.get('task', 'classification') == 'segmentation':
                 losses = np.concatenate(losses)
                 losses_min = np.min(losses, axis=0).squeeze()
-                print(losses_min, losses_min.shape)
             else:
                 losses = np.concatenate(losses)
                 losses_min = np.min(losses, axis=0).squeeze()
@@ -165,11 +164,9 @@ def eval_tta(config, augment):
     metrics = metrics / metrics['cnt']
     if C.get().conf.get('task', 'classification') == 'segmentation':
         metrics.metrics['correct'] = iou_meter.value()[1]  # iou_meter.value()[1]
-        print(iou_meter.value()[1], 'yahooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooo')
-
     gpu_secs = (time.time() - start_t) * torch.cuda.device_count()
     # reporter(minus_loss=metrics['minus_loss'], top1_valid=metrics['correct'], elapsed_time=gpu_secs, done=True)
-    tune.track.log(minus_loss=metrics['minus_loss'], top1_valid=metrics['correct'], elapsed_time=gpu_secs, done=True)
+    tune.report(minus_loss=metrics['minus_loss'], top1_valid=metrics['correct'], elapsed_time=gpu_secs, done=True)
     return metrics['correct']
 
 
@@ -279,8 +276,7 @@ if __name__ == '__main__':
         for cv_fold in range(cv_num):
             name = "search_%s_%s_fold%d_ratio%.1f" % (
                 C.get()['dataset'], C.get()['model']['type'], cv_fold, args.cv_ratio)
-            print(name)
-            register_trainable(name, eval_t)
+            # register_trainable(name, eval_t)
             algo = HyperOptSearch(space, metric=reward_attr)
             aug_config = {
                 'dataroot': args.dataroot, 'save_path': paths[cv_fold],
@@ -289,24 +285,21 @@ if __name__ == '__main__':
             }
             num_samples = 4 if args.smoke_test else args.num_search
             print(aug_config)
-
-            exp_config = {
-                name: {
-                    'run': name,
-                    'num_samples': 4 if args.smoke_test else args.num_search,
-                    'resources_per_trial': {'gpu': 1},
-                    'stop': {'training_iteration': args.num_policy},
-                    'config': {
-                        'dataroot': args.dataroot, 'save_path': paths[cv_fold],
-                        'cv_ratio_test': args.cv_ratio, 'cv_fold': cv_fold,
-                        'num_op': args.num_op, 'num_policy': args.num_policy
-                    },
-                }
-            }
+            # exp_config = {
+            #     name: {
+            #         'run': name,
+            #         'resources_per_trial': {'gpu': 1},
+            #         'stop': {'training_iteration': args.num_policy},
+            #         'config': {
+            #             'dataroot': args.dataroot, 'save_path': paths[cv_fold],
+            #             'cv_ratio_test': args.cv_ratio, 'cv_fold': cv_fold,
+            #             'num_op': args.num_op, 'num_policy': args.num_policy
+            #         },
+            #     }
+            # }
             algo = tune.suggest.ConcurrencyLimiter(algo,1)
-            results = run_experiments(exp_config, search_alg=algo, scheduler=None, verbose=0, queue_trials=True, resume=args.resume, concurrent=False, raise_on_failed_trial=True)
-            # results = run(eval_t, search_alg=algo, config=aug_config, num_samples=num_samples, sync_on_checkpoint=False,
-            #               resources_per_trial={'gpu': 0.5},  stop={'training_iteration': args.num_policy})
+            # results = run_experiments(exp_config, search_alg=algo, scheduler=None, verbose=0, queue_trials=True, resume=args.resume, concurrent=False, raise_on_failed_trial=True)
+            results = run(eval_t,name=name, search_alg=algo, config=aug_config, num_samples=num_samples, sync_on_checkpoint=False, resources_per_trial={'gpu': 1},  stop={'training_iteration': args.num_policy})
             dataframe = results.dataframe().sort_values(reward_attr, ascending=False)
             total_computation = dataframe['elapsed_time'].sum()
             for i in range(num_result_per_cv):
@@ -334,6 +327,12 @@ if __name__ == '__main__':
                     for _ in range(num_experiments)]
     augment_path = [_get_path(C.get()['dataset'], C.get()['model']['type'], 'ratio%.1f_augment%d' % (args.cv_ratio, _))
                     for _ in range(num_experiments)]
+
+    logger.info('getting results...')
+    final_results = [train_model(copy.deepcopy(copied_c), args.dataroot, C.get()['aug'], 0.0, 0,
+                                 save_path=default_path[_], skip_exist=True) for _ in range(num_experiments)] + \
+                    [train_model(copy.deepcopy(copied_c), args.dataroot, final_policy_set, 0.0, 0,
+                                 save_path=augment_path[_]) for _ in range(num_experiments)]
     tqdm_epoch = tqdm(range(C.get()['epoch']))
     is_done = False
     for epoch in tqdm_epoch:
