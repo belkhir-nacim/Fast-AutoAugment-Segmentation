@@ -213,7 +213,7 @@ if __name__ == '__main__':
     paths = [_get_path(C.get()['dataset'], C.get()['model']['type'], 'ratio%.1f_fold%d' % (args.cv_ratio, i)) for i in
              range(cv_num)]
 
-    # pretrain_results = [ train_model(copy.deepcopy(copied_c), args.dataroot, C.get()['aug'], args.cv_ratio, i, save_path=paths[i], skip_exist=False) for i in range(cv_num)]
+    pretrain_results = [ train_model(copy.deepcopy(copied_c), args.dataroot, C.get()['aug'], args.cv_ratio, i, save_path=paths[i], skip_exist=False) for i in range(cv_num)]
 
     tqdm_epoch = tqdm(range(C.get()['epoch']))
     is_done = False
@@ -329,12 +329,28 @@ if __name__ == '__main__':
                     for _ in range(num_experiments)]
 
     logger.info('getting results...')
+    print('-------------------------------')
+    print('-------------------------------')
+    print()
+    print(final_policy_set)
+    print('-------------------------------')
     final_results = [train_model(copy.deepcopy(copied_c), args.dataroot, C.get()['aug'], 0.0, 0,
-                                 save_path=default_path[_], skip_exist=True) for _ in range(num_experiments)] + \
+                                 save_path=default_path[_], skip_exist=False) for _ in range(num_experiments)] + \
                     [train_model(copy.deepcopy(copied_c), args.dataroot, final_policy_set, 0.0, 0,
                                  save_path=augment_path[_]) for _ in range(num_experiments)]
     tqdm_epoch = tqdm(range(C.get()['epoch']))
     is_done = False
+
+    for train_mode in ['default', 'augment']:
+        avg = 0.
+        for _ in range(num_experiments):
+            r_model, r_cv, r_dict = final_results.pop(0)
+            logger.info('[%s] top1_train=%.4f top1_test=%.4f' % (train_mode, r_dict['top1_train'], r_dict['top1_test']))
+            avg += r_dict['top1_test']
+        avg /= num_experiments
+        logger.info('[%s] top1_test average=%.4f (#experiments=%d)' % (train_mode, avg, num_experiments))
+    logger.info('processed in %.4f secs' % w.pause('train_aug'))
+
     for epoch in tqdm_epoch:
         while True:
             epochs = OrderedDict()
@@ -367,20 +383,12 @@ if __name__ == '__main__':
         if is_done:
             break
 
-    logger.info('getting results...')
+
     final_results = [train_model(copy.deepcopy(copied_c), args.dataroot, C.get()['aug'], 0.0, 0,
                                  save_path=default_path[_], skip_exist=True) for _ in range(num_experiments)] + \
                     [train_model(copy.deepcopy(copied_c), args.dataroot, final_policy_set, 0.0, 0,
                                  save_path=augment_path[_]) for _ in range(num_experiments)]
 
-    for train_mode in ['default', 'augment']:
-        avg = 0.
-        for _ in range(num_experiments):
-            r_model, r_cv, r_dict = final_results.pop(0)
-            logger.info('[%s] top1_train=%.4f top1_test=%.4f' % (train_mode, r_dict['top1_train'], r_dict['top1_test']))
-            avg += r_dict['top1_test']
-        avg /= num_experiments
-        logger.info('[%s] top1_test average=%.4f (#experiments=%d)' % (train_mode, avg, num_experiments))
-    logger.info('processed in %.4f secs' % w.pause('train_aug'))
+
 
     logger.info(w)
