@@ -330,7 +330,6 @@ def train_and_eval(tag, dataroot, test_ratio=0.0, cv_fold=0, reporter=None, metr
             logger.info(f'ema synced- rank={dist.get_rank()}')
 
         if is_master and (epoch % evaluation_interval == 0 or epoch == max_epoch):
-            print('how many times we get inside', is_master, epoch % evaluation_interval, epoch == max_epoch)
             with torch.no_grad():
                 rs['valid'] = run_epoch(model, validloader, criterion_ce, None, desc_default='valid', epoch=epoch,
                                         writer=writers[1], verbose=is_master, tqdm_disabled=tqdm_disabled)
@@ -364,7 +363,6 @@ def train_and_eval(tag, dataroot, test_ratio=0.0, cv_fold=0, reporter=None, metr
             main_metric = 'top1'
 
             if metric == 'last' or rs[metric][main_metric] > best_top1:
-                print('compute best')
                 if metric != 'last':
                     best_top1 = rs[metric][main_metric]
                 for key, setname in itertools.product(['loss', 'top1', 'top5'], ['train', 'valid', 'test']):
@@ -377,7 +375,6 @@ def train_and_eval(tag, dataroot, test_ratio=0.0, cv_fold=0, reporter=None, metr
                 reporter(loss_valid=rs['valid']['loss'], top1_valid=rs['valid'][main_metric],
                          loss_test=rs['test']['loss'], top1_test=rs['test'][main_metric])
                 # save checkpoint
-                print(is_master and save_path, 'before save')
                 if is_master and save_path:
                     logger.info('save model@%d to %s, err=%.4f' % (epoch, save_path, 1 - best_top1))
                     torch.save({
